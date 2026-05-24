@@ -9,7 +9,7 @@ const http = require('http');
 
 // Config from Environment Variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID; // Security check taaki koi aur aapka bot use na kare
+const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID; // Security check
 
 if (!BOT_TOKEN) {
     console.error("❌ Error: BOT_TOKEN environment variable missing!");
@@ -20,12 +20,12 @@ const bot = new Telegraf(BOT_TOKEN);
 const userSessions = {};
 const sessionDir = path.join(__dirname, 'sessions');
 
-// Helper: Phone number clean karne ke liye
+// Helper: Phone number clean karne ke liye (Sabhie countries ke liye compatible)
 function cleanNum(num) {
-    return num.replace(/[\s\-\+]/g, '');
+    return num.replace(/[^0-9]/g, ''); // Sirf digits rakhega, +, spaces, hyphens sab remove kar dega
 }
 
-// Security Middleware: Sirf aap hi is bot ko use kar payenge agar ALLOWED_CHAT_ID set hai
+// Security Middleware
 bot.use(async (ctx, next) => {
     if (ALLOWED_CHAT_ID && ctx.from.id.toString() !== ALLOWED_CHAT_ID.toString()) {
         return ctx.reply("🔒 Yeh ek private bot hai. Aapko ise use karne ki permission nahi hai.");
@@ -35,12 +35,11 @@ bot.use(async (ctx, next) => {
 
 // WhatsApp Connection Function
 async function initWhatsApp(ctx, userId, usePairingCode = false, phoneNumber = '') {
-    // Render transient storage ke liye session directory clean state se shuru karein
     if (!fs.existsSync(sessionDir)) {
         fs.mkdirSync(sessionDir, { recursive: true });
     }
 
-    // Agar pehle se Render variables me session save hai, toh use restore karein
+    // Restore session if exists in env
     if (process.env.SESSION_DATA && !fs.existsSync(path.join(sessionDir, 'creds.json'))) {
         try {
             fs.writeFileSync(path.join(sessionDir, 'creds.json'), Buffer.from(process.env.SESSION_DATA, 'base64').toString('utf-8'));
@@ -52,14 +51,14 @@ async function initWhatsApp(ctx, userId, usePairingCode = false, phoneNumber = '
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-    // Is block ko search karein aur replace karein
-const sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: 'silent' }),
-    browser: ['Render Server', 'Chrome', '20.0.0'],
-    printQRInTerminal: false, // <-- Yeh line add karna zaroori hai
-});
-
+    // Optimized socket configuration for cloud platforms
+    const sock = makeWASocket({
+        auth: state,
+        logger: pino({ level: 'silent' }),
+        browser: ['Render Server', 'Chrome', '20.0.0'],
+        printQRInTerminal: false, // Pairing code chalane ke liye ise false rakhna zaroori hai
+        mobile: false
+    });
 
     userSessions[userId] = sock;
     sock.ev.on('creds.update', saveCreds);
@@ -67,6 +66,7 @@ const sock = makeWASocket({
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
+        // QR Code handler
         if (qr && !usePairingCode) {
             try {
                 const qrBuffer = await QRCode.toBuffer(qr);
@@ -74,6 +74,7 @@ const sock = makeWASocket({
                     caption: '📸 Is QR Code ko apne WhatsApp (Linked Devices) se scan karein.'
                 });
             } catch (err) {
+                console.error("QR Error:", err);
                 ctx.reply('❌ QR Code generate karne me dikkat aayi.');
             }
         }
@@ -81,13 +82,10 @@ const sock = makeWASocket({
         if (connection === 'open') {
             ctx.reply('✅ WhatsApp Connect ho gaya hai!');
             
-            // Render persistent workaround: Creds file ko base64 string me convert karke console me print karna
             try {
                 const credsRaw = fs.readFileSync(path.join(sessionDir, 'creds.json'));
                 const base64Session = Buffer.from(credsRaw).toString('base64');
                 console.log("\n=================== RENDER WORKAROUND ===================");
-                console.log("Aapka session successfully ban gaya hai. Render dashboard me jaakar");
-                console.log("ek naya Environment Variable add karein:");
                 console.log("KEY: SESSION_DATA");
                 console.log(`VALUE: ${base64Session}`);
                 console.log("=========================================================\n");
@@ -102,9 +100,122 @@ const sock = makeWASocket({
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
                 console.log('🔄 Reconnecting WhatsApp...');
+                // Reconnect karte waqt pairing code flags bypass karein
                 initWhatsApp(ctx, userId, false);
             } else {
                 ctx.reply('❌ Aap WhatsApp se logout ho chuke hain. Dubara /login karein.');
+                delete userSessions[userId];
+                try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (e) {}
+            }
+        }
+    });
+
+    // Pairing Code Request Handler (With stable delay)
+    if (usePairingCode && phoneNumber) {
+        setTimeout(async () => {
+            try {
+                const formattedNumber = cleanNum(phoneNumber);
+                console.log(`Pairing code requested for: ${formattedNumber}`);
+                
+                let code = await sock.requestPairingCode(formattedNumber);
+                code = code?.match(/.{1,4}/g)?.join('-') || code;
+                
+                await ctx.reply(`🔑 Aapka Pairing Code hai:\n\n\`${code}\`\n\nIs code ko apne WhatsApp notification me enter karein.`, { parse_mode: 'Markdown' });
+            } catch (err) {
+                console.error("Pairing Code Error:", err);
+                ctx.reply('❌ Pairing code request fail ho gaya. Kripya check karein ki number WhatsApp par active hai ya thoda ruk kar try karein.');
+            }
+        }, 6000); // Badhakar 6 seconds kiya taaki connection fully establish ho jaye
+    }
+}
+
+// --- BOT COMMANDS ---
+bot.start((ctx) => {
+    ctx.reply('👋 Welcome! Commands:\n/login - Connect WhatsApp\n/getpic <number> - Download DP\n/chat - View active chats');
+});
+
+bot.command('login', (ctx) => {
+    ctx.reply('Login method select karein:', Markup.inlineKeyboard([
+        Markup.button.callback('QR Code Se', 'login_qr'),
+        Markup.button.callback('Pairing Code Se', 'login_code')
+    ]));
+});
+
+bot.action('login_qr', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply('⌛ QR Code generate ho raha hai...');
+    initWhatsApp(ctx, ctx.from.id, false);
+});
+
+bot.action('login_code', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply('📞 Apna number country code ke sath bhejein (Bina + ke):\n\nExample:\nIndia: `/number 919876543210`\nRussia: `/number 77079335643`', { parse_mode: 'Markdown' });
+});
+
+bot.command('number', (ctx) => {
+    // Regex se command ke baad ka text filter kiya
+    const text = ctx.message.text.replace(/\/number/g, '').trim();
+    if (!text) return ctx.reply('❌ Sahi format: `/number 77079335643`', { parse_mode: 'Markdown' });
+    
+    ctx.reply('⌛ Pairing Code request kiya ja raha hai, kripya 6 seconds wait karein...');
+    initWhatsApp(ctx, ctx.from.id, true, text);
+});
+
+bot.command('getpic', async (ctx) => {
+    const sock = userSessions[ctx.from.id];
+    if (!sock) return ctx.reply('❌ Pehle /login karke WhatsApp link karein.');
+
+    const args = ctx.message.text.replace(/\/getpic/g, '').trim();
+    if (!args) return ctx.reply('❌ Sahi format: `/getpic 77079335643`', { parse_mode: 'Markdown' });
+
+    const targetNumber = cleanNum(args);
+    await ctx.reply('🔍 Profile picture search ki ja rahi hai...');
+
+    try {
+        const ppUrl = await sock.profilePictureUrl(`${targetNumber}@s.whatsapp.net`, 'image');
+        if (ppUrl) {
+            await ctx.replyWithPhoto(ppUrl, { caption: `📸 +${targetNumber} ki profile picture.` });
+        } else {
+            ctx.reply('😔 Is number par koi public profile picture nahi mili.');
+        }
+    } catch (err) {
+        ctx.reply('❌ DP nahi mil saki (Number galat hai ya privacy restrictions hain).');
+    }
+});
+
+bot.command('chat', async (ctx) => {
+    const sock = userSessions[ctx.from.id];
+    if (!sock) return ctx.reply('❌ Pehle /login karke WhatsApp link karein.');
+
+    await ctx.reply('📂 Chats load ho rahi hain...');
+    try {
+        const chats = await sock.store?.chats?.all() || Object.values(sock.contacts || {});
+        if (chats.length === 0) return ctx.reply('📭 Abhi koi active chat history nahi mili.');
+
+        let chatList = '💬 *WhatsApp Chats:*\n\n';
+        chats.slice(0, 15).forEach((chat, index) => {
+            const name = chat.name || chat.verifiedName || chat.id.split('@')[0];
+            chatList += `${index + 1}. *${name}* (${chat.id.split('@')[0]})\n`;
+        });
+        ctx.reply(chatList, { parse_mode: 'Markdown' });
+    } catch (err) {
+        ctx.reply('❌ Chats load karne me dikkat aayi.');
+    }
+});
+
+// Render Web Server Setup
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running safely!');
+}).listen(PORT, () => {
+    console.log(`Web server active on port ${PORT}`);
+});
+
+bot.launch().then(() => console.log('🚀 Telegram Bot Active!'));
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
                 delete userSessions[userId];
                 try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (e) {}
             }
