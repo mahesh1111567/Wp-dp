@@ -233,6 +233,115 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'));
                 console.error("Pairing Code Error:", err);
                 ctx.reply('❌ Pairing code request fail ho gaya. Kripya check karein ki number WhatsApp par active hai ya thoda ruk kar try karein.');
             }
+        }, 6000); // 6 seconds wait
+    }
+}
+
+// --- BOT COMMANDS ---
+bot.start((ctx) => {
+    ctx.reply('👋 Welcome! Commands:\n/login - Connect WhatsApp\n/getpic <number> - Download DP\n/chat - View active chats');
+});
+
+bot.command('login', (ctx) => {
+    ctx.reply('Login method select karein:', Markup.inlineKeyboard([
+        Markup.button.callback('QR Code Se', 'login_qr'),
+        Markup.button.callback('Pairing Code Se', 'login_code')
+    ]));
+});
+
+bot.action('login_qr', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply('⌛ QR Code generate ho raha hai...');
+    initWhatsApp(ctx, ctx.from.id, false);
+});
+
+bot.action('login_code', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply('📞 Apna number country code ke sath bhejein (Bina + ke):\n\nExample:\nIndia: `/number 919876543210`\nRussia: `/number 77079335643`', { parse_mode: 'Markdown' });
+});
+
+bot.command('number', (ctx) => {
+    const text = ctx.message.text.replace(/\/number/g, '').trim();
+    if (!text) return ctx.reply('❌ Sahi format: `/number 77079335643`', { parse_mode: 'Markdown' });
+    
+    ctx.reply('⌛ Pairing Code request kiya ja raha hai, kripya 6 seconds wait karein...');
+    initWhatsApp(ctx, ctx.from.id, true, text);
+});
+
+bot.command('getpic', async (ctx) => {
+    const sock = userSessions[ctx.from.id];
+    if (!sock) return ctx.reply('❌ Pehle /login karke WhatsApp link karein.');
+
+    const args = ctx.message.text.replace(/\/getpic/g, '').trim();
+    if (!args) return ctx.reply('❌ Sahi format: `/getpic 77079335643`', { parse_mode: 'Markdown' });
+
+    const targetNumber = cleanNum(args);
+    await ctx.reply('🔍 Profile picture search ki ja rahi hai...');
+
+    try {
+        const ppUrl = await sock.profilePictureUrl(`${targetNumber}@s.whatsapp.net`, 'image');
+        if (ppUrl) {
+            await ctx.replyWithPhoto(ppUrl, { caption: `📸 +${targetNumber} ki profile picture.` });
+        } else {
+            ctx.reply('😔 Is number par koi public profile picture nahi mili.');
+        }
+    } catch (err) {
+        ctx.reply('❌ DP nahi mil saki (Number galat hai ya privacy restrictions hain).');
+    }
+});
+
+bot.command('chat', async (ctx) => {
+    const sock = userSessions[ctx.from.id];
+    if (!sock) return ctx.reply('❌ Pehle /login karke WhatsApp link karein.');
+
+    await ctx.reply('📂 Chats load ho rahi hain...');
+    try {
+        const chats = await sock.store?.chats?.all() || Object.values(sock.contacts || {});
+        if (chats.length === 0) return ctx.reply('📭 Abhi koi active chat history nahi mili.');
+
+        let chatList = '💬 *WhatsApp Chats:*\n\n';
+        chats.slice(0, 15).forEach((chat, index) => {
+            const name = chat.name || chat.verifiedName || chat.id.split('@')[0];
+            chatList += `${index + 1}. *${name}* (${chat.id.split('@')[0]})\n`;
+        });
+        ctx.reply(chatList, { parse_mode: 'Markdown' });
+    } catch (err) {
+        ctx.reply('❌ Chats load karne me dikkat aayi.');
+    }
+});
+
+// Render Web Server Setup
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is running safely!');
+}).listen(PORT, () => {
+    console.log(`Web server active on port ${PORT}`);
+});
+
+bot.launch().then(() => console.log('🚀 Telegram Bot Active!'));
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+            }
+        }
+    });
+
+    // Pairing Code Request Handler (With stable delay)
+    if (usePairingCode && phoneNumber) {
+        setTimeout(async () => {
+            try {
+                const formattedNumber = cleanNum(phoneNumber);
+                console.log(`Pairing code requested for: ${formattedNumber}`);
+                
+                let code = await sock.requestPairingCode(formattedNumber);
+                code = code?.match(/.{1,4}/g)?.join('-') || code;
+                
+                await ctx.reply(`🔑 Aapka Pairing Code hai:\n\n\`${code}\`\n\nIs code ko apne WhatsApp notification me enter karein.`, { parse_mode: 'Markdown' });
+            } catch (err) {
+                console.error("Pairing Code Error:", err);
+                ctx.reply('❌ Pairing code request fail ho gaya. Kripya check karein ki number WhatsApp par active hai ya thoda ruk kar try karein.');
+            }
         }, 6000); // 6 seconds ka wait taaki connection stable ho jaye
     }
 }
