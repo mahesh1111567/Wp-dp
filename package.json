@@ -2,9 +2,9 @@
   "name": "wa-telegram-bot",
   "version": "1.0.0",
   "description": "WhatsApp DP Downloader Telegram Bot",
-  "main": "bot.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
