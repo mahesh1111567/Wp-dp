@@ -148,11 +148,13 @@ bot.action('login_code', async (ctx) => {
 });
 
 bot.command('number', (ctx) => {
-    const text = ctx.message.text.split(' ')[1];
-    if (!text) return ctx.reply('❌ Sahi format: `/number 919876543210`', { parse_mode: 'Markdown' });
+    // Yeh line message se sirf numbers nikaal legi (baaki sab remove kar degi)
+    const text = ctx.message.text.replace(/\/number/g, '').trim(); 
+    if (!text) return ctx.reply('❌ Sahi format: `/number 77079335643`', { parse_mode: 'Markdown' });
     ctx.reply('⌛ Pairing Code request kiya ja raha hai...');
     initWhatsApp(ctx, ctx.from.id, true, text);
 });
+
 
 bot.command('getpic', async (ctx) => {
     const sock = userSessions[ctx.from.id];
