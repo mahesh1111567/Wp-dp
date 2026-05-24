@@ -52,11 +52,14 @@ async function initWhatsApp(ctx, userId, usePairingCode = false, phoneNumber = '
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ['Render Server', 'Chrome', '20.0.0']
-    });
+    // Is block ko search karein aur replace karein
+const sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    browser: ['Render Server', 'Chrome', '20.0.0'],
+    printQRInTerminal: false, // <-- Yeh line add karna zaroori hai
+});
+
 
     userSessions[userId] = sock;
     sock.ev.on('creds.update', saveCreds);
@@ -117,7 +120,7 @@ async function initWhatsApp(ctx, userId, usePairingCode = false, phoneNumber = '
             } catch (err) {
                 ctx.reply('❌ Pairing code request fail ho gaya. Number format check karein.');
             }
-        }, 3000);
+        }, 9000);
     }
 }
 
